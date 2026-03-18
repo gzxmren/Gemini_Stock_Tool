@@ -1,0 +1,7 @@
+fastapi==0.104.1
+uvicorn==0.23.2
+pytest==7.4.3
+httpx==0.25.1
+yfinance==0.2.31
+akshare==1.11.14
+pandas==2.1.2
