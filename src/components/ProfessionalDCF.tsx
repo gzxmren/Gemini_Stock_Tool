@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Calculator, ArrowRight, DollarSign, Activity, Gift, Globe } from 'lucide-react';
+import { Calculator, Activity, Gift, Globe } from 'lucide-react';
 
 interface DCFData {
     symbol: string;
@@ -45,13 +45,13 @@ export function ProfessionalDCF({ symbol, currentPrice }: { symbol: string, curr
     const [revenueGrowth, setRevenueGrowth] = useState(10);
     const [ebitMargin, setEbitMargin] = useState(25);
     const [waccOverride, setWaccOverride] = useState<number | null>(null);
-    const [terminalGrowth, setTerminalGrowth] = useState(2.5);
+    const [terminalGrowth] = useState(2.5);
 
     useEffect(() => {
         const fetchDCFData = async () => {
             setLoading(true);
             try {
-                const res = await fetch(`http://localhost:8000/api/dcf/professional?symbol=${symbol}`);
+                const res = await fetch(`http://localhost:8030/api/dcf/professional?symbol=${symbol}`);
                 const json = await res.json();
                 if (json.error) throw new Error(json.error);
                 setData(json);

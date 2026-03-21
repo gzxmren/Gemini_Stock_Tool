@@ -7,3 +7,22 @@ backend/*.db
 .superpowers/
 .pytest_cache/
 __pycache__/
+
+# Environment & Secrets
+.env
+.env.local
+
+# Database & Logs
+*.db
+*.log
+backend/*.log
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+
+# Temporary Debug Scripts
+debug_*.py
+test_pipeline.py
+sketch_ui.html

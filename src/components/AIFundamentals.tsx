@@ -18,22 +18,23 @@ interface AnalysisData {
     score?: number;
     cached_at?: string;
     analysis_period?: string;
+    is_preliminary?: boolean;
+    confidence?: number;
 }
 
 interface AvailableDates {
     quarterly: string[];
     annual: string[];
+    cached_dates?: string[];
 }
 
 interface AIFundamentalsProps {
     symbol: string;
     market: string;
     lastUpdated?: number;
-    has_ai_cache?: boolean;
-    latest_report_date?: string;
 }
 
-export const AIFundamentals: React.FC<AIFundamentalsProps> = ({ symbol, market, lastUpdated, latest_report_date }) => {
+export const AIFundamentals: React.FC<AIFundamentalsProps> = ({ symbol, market, lastUpdated }) => {
     const [token, setToken] = useState<string | null>(localStorage.getItem('google_access_token'));
     const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
@@ -58,22 +59,11 @@ export const AIFundamentals: React.FC<AIFundamentalsProps> = ({ symbol, market, 
             setAnalysis(null);
             setLocalIsCached(false);
             setError(null);
-            if (latest_report_date) {
-                setSelectedDate(latest_report_date);
-            } else {
-                setSelectedDate('');
-            }
+            setSelectedDate('');
             setCompareDate('');
             fetchDates();
         }
     }, [symbol, market]);
-
-    // 2. Sync selected date
-    useEffect(() => {
-        if (latest_report_date && latest_report_date !== selectedDate) {
-            setSelectedDate(latest_report_date);
-        }
-    }, [latest_report_date]);
 
     const fetchDates = async () => {
         setLoadingDates(true);
@@ -84,8 +74,14 @@ export const AIFundamentals: React.FC<AIFundamentalsProps> = ({ symbol, market, 
             setAvailableDates(data);
             
             const dates = periodType === 'quarterly' ? data.quarterly : data.annual;
-            if (dates && dates.length > 0 && !selectedDate) {
-                setSelectedDate(dates[0]);
+            if (dates && dates.length > 0) {
+                // 如果后端返回了 cached_dates，优先选中最新的有缓存的日期
+                if (data.cached_dates && data.cached_dates.length > 0) {
+                    setSelectedDate(data.cached_dates[0]);
+                    setLocalIsCached(true);
+                } else {
+                    setSelectedDate(dates[0]);
+                }
             }
         } catch (e) {
             console.error("Failed to fetch dates", e);
@@ -112,7 +108,7 @@ export const AIFundamentals: React.FC<AIFundamentalsProps> = ({ symbol, market, 
             if (forceRefresh) url.searchParams.append('refresh', 'true');
             if (checkOnly) url.searchParams.append('check_only', 'true');
             
-            const target = selectedDate || latest_report_date;
+            const target = selectedDate;
             if (target) url.searchParams.append('target_date', target);
             if (isCompareMode && compareDate) url.searchParams.append('compare_date', compareDate);
             
@@ -191,6 +187,7 @@ export const AIFundamentals: React.FC<AIFundamentalsProps> = ({ symbol, market, 
                 setCompareDate={setCompareDate}
                 loading={loading}
                 fetchAnalysis={fetchAnalysis}
+                cached_dates={availableDates?.cached_dates || []}
             />
 
             {loading && !analysis ? (

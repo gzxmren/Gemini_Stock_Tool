@@ -15,7 +15,13 @@
 *   **WACC 智能估算**：基于实时无风险利率 (Rf) 与 $\beta$ 系数自动计算资本成本。
 *   **分红回报分析**：深度展示股息率、派息率及近三年派息历史。
 
-### 3. 自选与持久化 (Portfolio)
+### 3. AI 财报透视 (AI Fundamentals Insight)
+*   **DeepSeek 大模型集成**：利用 DeepSeek-V3/R1 级模型深度解读财报数据，提供更精准的语义分析。
+*   **智能缓存系统**：内置基于 SQLite 的本地缓存机制（7天有效期），**大幅降低 API 费用**并实现结果秒开。
+*   **多格式专业导出**：支持一键导出精美的 **PDF 研报**或通用的 **Markdown 格式**，方便保存与分享。
+*   **OAuth2 安全认证**：支持 Google 账号一键登录（可选），保护分析请求的安全性。
+
+### 4. 自选与持久化 (Portfolio)
 *   **极简侧边栏**：快速切换关注股票，实时同步最新价格。
 *   **本地私密存储**：使用本地 SQLite 数据库存储您的自选列表，无需账号，保护隐私。
 
@@ -24,27 +30,34 @@
 *   **前端 (UI)**: React 18, TypeScript, TailwindCSS, Lucide Icons.
 *   **桌面容器**: Electron (提供原生窗口体验).
 *   **后端 (Engine)**: FastAPI (Python 3.10+), SQLAlchemy (ORM).
+*   **AI 引擎**: DeepSeek-Chat (兼容 OpenAI API 协议).
+*   **报表渲染**: WeasyPrint & Jinja2 (后端高保真 PDF 生成).
 *   **数据源**: 
     *   美股：`yfinance` (Yahoo Finance API)
-    *   A股：`httpx` (Tencent Finance API)
-*   **本地数据库**: SQLite.
+    *   A股：`Sina Finance` (K线), `httpx` (Tencent 实时行情)
+*   **本地数据库**: SQLite (用于自选股、AI 分析结果缓存).
 
 ## 🚀 快速启动 (Ubuntu/Linux)
 
 项目内置了一键部署脚本，您可以非常简单地运行它：
 
-1. **克隆项目**
+1. **配置环境变量**
+   - 在项目根目录创建 `.env` 文件（参考 `.env.example`）。
+   - 填入 `DEEPSEEK_API_KEY` 及相关设置（必填）。
+   - 填入 `GOOGLE_CLIENT_ID` 和 `GOOGLE_CLIENT_SECRET`（可选，用于认证）。
+
+2. **克隆项目**
    ```bash
    git clone https://github.com/gzxmren/Gemini_Stock_Tool.git
    cd Gemini_Stock_Tool
    ```
 
-2. **赋予运行权限**
+3. **赋予运行权限**
    ```bash
    chmod +x start_ubuntu.sh
    ```
 
-3. **启动应用**
+4. **启动应用**
    ```bash
    ./start_ubuntu.sh
    ```
@@ -55,8 +68,10 @@
 - [x] Phase 1: 中美股基础行情查询
 - [x] Phase 2: DCF 估值引擎与分红分析
 - [x] Phase 3: SQLite 自选股持久化
-- [ ] Phase 4: 集成 ECharts 实现 K 线图可视化 (即将推出)
-- [ ] Phase 5: AI 财报要点自动总结
+- [x] Phase 4: 集成 ECharts 实现 K 线图可视化
+- [x] Phase 5: AI 财报要点总结（Gemini 升级为 DeepSeek）
+- [x] Phase 6: AI 分析缓存系统与多格式 (PDF/MD) 导出
+- [ ] Phase 7: 分享链接功能与邮件自动推送
 
 ## ⚖️ 免责声明
 本工具仅供学习与辅助分析使用，不构成任何投资建议。股市有风险，入市需谨慎。

@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Search, TrendingUp, AlertCircle, Info, BarChart3, Activity, ArrowUpRight, ArrowDownRight, Star, Target, Calculator } from 'lucide-react';
+import { Search, TrendingUp, AlertCircle, Info, BarChart3, Activity, ArrowUpRight, ArrowDownRight, Star, Calculator, Sparkles, Zap } from 'lucide-react';
 import { AnalystConsensus } from './components/AnalystConsensus';
 import { DCFSimulator } from './components/DCFSimulator';
 import { ProfessionalDCF } from './components/ProfessionalDCF';
+import { AIFundamentals } from './components/AIFundamentals';
+import { InsightsStation } from './components/InsightsStation';
 import { Sidebar } from './components/Sidebar';
+import KLineChart from './components/KLineChart';
 
 interface Stats {
     low: number;
@@ -22,22 +25,14 @@ interface StockData {
         change_pct: string;
         pe_stats?: Stats;
         pb_stats?: Stats;
-        analyst_target?: {
-            low: number;
-            mean: number;
-            high: number;
-        };
-        dcf_baseline?: {
-            fcf: number;
-            shares: number;
-        };
     }
 }
 
 function Gauge({ label, current, stats }: { label: string, current: number, stats?: Stats }) {
-    if (!stats || current === 0) return null;
-    const isCheap = stats.percentile < 30;
-    const isExpensive = stats.percentile > 70;
+    if (!stats || !current) return null;
+    const percentile = Math.min(100, Math.max(0, Number(stats.percentile) || 0));
+    const isCheap = percentile < 30;
+    const isExpensive = percentile > 70;
 
     return (
         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
@@ -49,11 +44,11 @@ function Gauge({ label, current, stats }: { label: string, current: number, stat
                     <h3 className="font-bold text-slate-700">{label === 'PE' ? '市盈率 (PE)' : '市净率 (PB)'}</h3>
                 </div>
                 <div className={`text-xs font-bold px-2 py-1 rounded-full ${isCheap ? 'bg-emerald-50 text-emerald-600' : isExpensive ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
-                    {stats.percentile}% 分位 ({isCheap ? '极低' : isExpensive ? '偏高' : '适中'})
+                    {percentile}% 分位 ({isCheap ? '极低' : isExpensive ? '偏高' : '适中'})
                 </div>
             </div>
             <div className="flex items-baseline gap-2 mb-6">
-                <span className="text-4xl font-black text-slate-800">{current}</span>
+                <span className="text-4xl font-black text-slate-800">{Number(current).toFixed(2)}</span>
                 <span className="text-slate-400 text-sm font-medium">当前值</span>
             </div>
             <div className="relative pt-6 pb-2">
@@ -62,7 +57,7 @@ function Gauge({ label, current, stats }: { label: string, current: number, stat
                     <div className="h-full bg-orange-400 w-1/3 opacity-50" />
                     <div className="h-full bg-red-400 w-1/3 opacity-50" />
                 </div>
-                <div className="absolute top-4 transition-all duration-1000 ease-out" style={{ left: `${stats.percentile}%`, transform: 'translateX(-50%)' }}>
+                <div className="absolute top-4 transition-all duration-1000 ease-out" style={{ left: `${percentile}%`, transform: 'translateX(-50%)' }}>
                     <div className="flex flex-col items-center">
                         <div className="w-4 h-4 bg-slate-800 rounded-full border-2 border-white shadow-md mb-1" />
                         <span className="text-[10px] font-bold text-slate-800 bg-white px-1 shadow-sm border rounded">当前</span>
@@ -79,13 +74,33 @@ function Gauge({ label, current, stats }: { label: string, current: number, stat
 }
 
 export default function App() {
-  const [symbol, setSymbol] = useState('AAPL');
-  const [market, setMarket] = useState('US');
+  const [symbol, setSymbol] = useState(localStorage.getItem('last_symbol') || 'AAPL');
+  const [market, setMarket] = useState(localStorage.getItem('last_market') || 'US');
   const [data, setData] = useState<StockData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState(Date.now());
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'dcf'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'dcf' | 'fundamentals' | 'insights'>('dashboard');
+
+  // Sync state to localStorage
+  useEffect(() => {
+    localStorage.setItem('last_symbol', symbol);
+    localStorage.setItem('last_market', market);
+    localStorage.setItem('last_tab', activeTab);
+  }, [symbol, market, activeTab]);
+
+  // Capture token from URL after OAuth redirect
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('access_token');
+    if (token) {
+        localStorage.setItem('google_access_token', token);
+        // Clear URL parameters
+        window.history.replaceState({}, document.title, window.location.pathname);
+        // Force state update for child components
+        setLastUpdated(Date.now());
+    }
+  }, []);
 
   const fetchQuote = async (targetSymbol?: string, targetMarket?: string) => {
     const s = targetSymbol || symbol;
@@ -93,15 +108,16 @@ export default function App() {
     if (!s) return;
     setLoading(true);
     setError(null);
-    setData(null);
+    // setData(null); // Remove this to avoid flashing during redirect refresh
     try {
-      const res = await fetch(`http://localhost:8000/api/quote?symbol=${s}&market=${m}`);
+      const res = await fetch(`http://localhost:8030/api/quote?symbol=${s}&market=${m}`);
       const json = await res.json();
       if (json.error) setError(json.error);
       else {
           setData(json);
           setSymbol(s);
           setMarket(m);
+          setLastUpdated(Date.now());
       }
     } catch (err) {
       setError("无法连接到后端服务器。");
@@ -110,9 +126,14 @@ export default function App() {
     }
   };
 
+  // Initial fetch on mount
+  useEffect(() => {
+    fetchQuote();
+  }, []);
+
   const addToWatchlist = async () => {
       try {
-          await fetch('http://localhost:8000/api/watchlist', {
+          await fetch('http://localhost:8030/api/watchlist', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ symbol, market })
@@ -131,12 +152,12 @@ export default function App() {
     }
   }, [market]);
 
-  const isNegative = data?.metrics?.change_pct?.startsWith('-') || false;
+  const isNegative = String(data?.metrics?.change_pct || '').startsWith('-');
 
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 overflow-hidden">
       <Sidebar 
-        currentSymbol={data?.symbol.split(' ')[0] || symbol} 
+        currentSymbol={(String(data?.symbol || symbol)).split(' ')[0]} 
         onSelectStock={(s, m) => fetchQuote(s, m)} 
         lastUpdated={lastUpdated}
       />
@@ -152,7 +173,7 @@ export default function App() {
             </div>
             
             {/* Tab 切换按钮 */}
-            <div className="flex bg-slate-200/50 p-1 rounded-xl">
+            <div className="flex bg-slate-200/50 p-1 rounded-xl flex-wrap">
                 <button 
                     onClick={() => setActiveTab('dashboard')} 
                     className={`px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'dashboard' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
@@ -164,6 +185,18 @@ export default function App() {
                     className={`px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'dcf' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                 >
                     <Calculator size={16} /> 专业 DCF
+                </button>
+                <button 
+                    onClick={() => setActiveTab('fundamentals')} 
+                    className={`px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'fundamentals' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                    <Sparkles size={16} /> AI 财报透视
+                </button>
+                <button 
+                    onClick={() => setActiveTab('insights')} 
+                    className={`px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'insights' ? 'bg-slate-900 text-green-400 shadow-lg' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                    <Zap size={16} /> 业绩情报站
                 </button>
             </div>
           </header>
@@ -212,28 +245,27 @@ export default function App() {
                       </div>
                       <div className="text-left md:text-right">
                           <div className={`text-xl font-bold mb-1 flex items-center md:justify-end gap-1 ${isNegative ? 'text-red-500' : 'text-emerald-500'}`}>
-                              {isNegative ? <ArrowDownRight size={20} /> : <ArrowUpRight size={20} />} {data.metrics?.change_pct}
+                              {isNegative ? <ArrowDownRight size={20} /> : <ArrowUpRight size={20} />} {String(data.metrics?.change_pct || '0.00%')}
                           </div>
                           <div className="text-7xl font-black text-slate-900 tracking-tighter flex items-end md:justify-end">
                               <span className="text-3xl font-bold mb-3 mr-2 text-slate-400">{data.currency || '$'}</span>
-                              {data.price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              {(Number(data.price) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                       </div>
                   </div>
               </div>
+
+              {/* K-Line Chart */}
+              <KLineChart symbol={symbol} market={market} />
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <Gauge label="PE" current={data.metrics?.pe || 0} stats={data.metrics?.pe_stats} />
                   <Gauge label="PB" current={data.metrics?.pb || 0} stats={data.metrics?.pb_stats} />
               </div>
 
-              {data.metrics?.analyst_target && data.metrics.analyst_target.mean && (
-                  <AnalystConsensus targets={data.metrics.analyst_target} currentPrice={data.price} />
-              )}
+              <AnalystConsensus symbol={symbol} market={market} currentPrice={data.price} />
 
-              {data.metrics?.dcf_baseline && data.metrics.dcf_baseline.shares > 1 && (
-                  <DCFSimulator baseline={data.metrics.dcf_baseline} currentPrice={data.price} />
-              )}
+              <DCFSimulator symbol={symbol} market={market} currentPrice={data.price} />
             </div>
           )}
 
@@ -246,6 +278,21 @@ export default function App() {
               <div className="p-10 text-center text-slate-500 bg-slate-100 rounded-3xl border border-slate-200 border-dashed">
                   专业 DCF 模型当前仅支持美股 (需获取完整的全市场财务报表数据)。
               </div>
+          )}
+
+          {data && activeTab === 'fundamentals' && (
+              <AIFundamentals 
+                symbol={symbol} 
+                market={market} 
+                lastUpdated={lastUpdated} 
+              />
+          )}
+
+          {data && activeTab === 'insights' && (
+              <InsightsStation 
+                symbol={symbol} 
+                market={market} 
+              />
           )}
 
           {!data && !loading && !error && (

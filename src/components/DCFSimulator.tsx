@@ -1,24 +1,54 @@
 import { Calculator, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
-interface DCFBaseline {
-    fcf: number;
-    shares: number;
+interface DCFSimulatorProps {
+    symbol: string;
+    market: string;
+    currentPrice: number;
 }
 
-export function DCFSimulator({ baseline, currentPrice }: { baseline: DCFBaseline | undefined, currentPrice: number }) {
-    if (!baseline || baseline.shares === 0) return null;
-
+export function DCFSimulator({ symbol, market, currentPrice }: DCFSimulatorProps) {
+    const [baseline, setBaseline] = useState<{fcf: number, shares: number} | null>(null);
     const [growthRate, setGrowthRate] = useState(10); // 10%
     const [discountRate, setDiscountRate] = useState(9); // 9%
     const [terminalRate, setTerminalRate] = useState(2); // 2%
     const [intrinsicValue, setIntrinsicValue] = useState<number | null>(null);
+    const [loadingBaseline, setLoadingBaseline] = useState(true);
 
-    // Call backend API when sliders change
+    // Fetch baseline data on mount
     useEffect(() => {
+        if (market !== 'US') {
+            setLoadingBaseline(false);
+            return;
+        }
+        
+        const fetchBaseline = async () => {
+            setLoadingBaseline(true);
+            try {
+                const res = await fetch(`http://localhost:8030/api/dcf/baseline?symbol=${symbol}&market=${market}`);
+                const data = await res.json();
+                if (data && data.shares > 0) {
+                    setBaseline(data);
+                } else {
+                    setBaseline(null);
+                }
+            } catch (err) {
+                console.error("Failed to fetch DCF baseline", err);
+                setBaseline(null);
+            } finally {
+                setLoadingBaseline(false);
+            }
+        };
+        fetchBaseline();
+    }, [symbol, market]);
+
+    // Call backend API when sliders change, only if we have baseline
+    useEffect(() => {
+        if (!baseline || baseline.shares === 0) return;
+
         const fetchDCF = async () => {
             try {
-                const response = await fetch('http://localhost:8000/api/dcf', {
+                const response = await fetch('http://localhost:8030/api/dcf', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -30,8 +60,9 @@ export function DCFSimulator({ baseline, currentPrice }: { baseline: DCFBaseline
                         years: 5
                     })
                 });
+                // Note: Python backend returns {"fair_value": ..., "upside": ...} based on the updated fast API code
                 const data = await response.json();
-                setIntrinsicValue(data.intrinsic_value);
+                setIntrinsicValue(data.fair_value);
             } catch (e) {
                 console.error("Failed to calculate DCF", e);
             }
@@ -43,6 +74,18 @@ export function DCFSimulator({ baseline, currentPrice }: { baseline: DCFBaseline
         }, 300);
         return () => clearTimeout(timeoutId);
     }, [growthRate, discountRate, terminalRate, baseline]);
+
+    if (market !== 'US') return null;
+
+    if (loadingBaseline) {
+        return (
+            <div className="bg-slate-900 text-white rounded-3xl p-8 shadow-2xl flex items-center justify-center min-h-[300px]">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+            </div>
+        );
+    }
+
+    if (!baseline || baseline.shares <= 1 || !currentPrice) return null;
 
     const marginOfSafety = intrinsicValue ? ((intrinsicValue - currentPrice) / currentPrice) * 100 : 0;
     const isUndervalued = marginOfSafety > 0;
@@ -113,7 +156,7 @@ export function DCFSimulator({ baseline, currentPrice }: { baseline: DCFBaseline
                     <div className="text-center mb-6">
                         <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-2">计算得出的内在价值</div>
                         <div className="text-6xl font-black text-white tracking-tighter">
-                            ${intrinsicValue !== null ? intrinsicValue.toFixed(2) : '...'}
+                            ${intrinsicValue !== null ? Number(intrinsicValue).toFixed(2) : '...'}
                         </div>
                     </div>
 
@@ -125,7 +168,7 @@ export function DCFSimulator({ baseline, currentPrice }: { baseline: DCFBaseline
                             </div>
                             <div className="text-sm text-slate-300 mt-1">
                                 {isUndervalued ? '当前股价低于内在价值。' : '当前股价已高于计算出的内在价值。'} 
-                                安全边际: <b>{marginOfSafety > 0 ? '+' : ''}{marginOfSafety.toFixed(1)}%</b>
+                                安全边际: <b>{marginOfSafety > 0 ? '+' : ''}{Number(marginOfSafety).toFixed(1)}%</b>
                             </div>
                         </div>
                     </div>

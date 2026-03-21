@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Star, Trash2, TrendingUp, Activity } from 'lucide-react';
+import { Star, Trash2, Activity } from 'lucide-react';
 
 interface WatchlistItem {
     symbol: string;
@@ -10,11 +10,12 @@ interface WatchlistItem {
 
 export function Sidebar({ onSelectStock, currentSymbol, lastUpdated }: { onSelectStock: (symbol: string, market: string) => void, currentSymbol: string, lastUpdated?: number }) {
     const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
 
     const fetchWatchlist = useCallback(async () => {
+        setLoading(true);
         try {
-            const res = await fetch('http://localhost:8000/api/watchlist');
+            const res = await fetch('http://localhost:8030/api/watchlist');
             if (!res.ok) throw new Error("Failed to fetch");
             const data = await res.json();
             
@@ -23,19 +24,37 @@ export function Sidebar({ onSelectStock, currentSymbol, lastUpdated }: { onSelec
                 return;
             }
             
-            // 为了安全，我们先只显示基础数据，价格异步加载
-            setWatchlist(data.map(item => ({ ...item })));
+            // 为了防止刷新时出现空白，我们执行“增量同步”
+            // 如果旧状态里已有该股票的价格，先保留它
+            setWatchlist(prev => {
+                return data.map((item: any) => {
+                    const existing = prev.find(p => p.symbol === item.symbol);
+                    return {
+                        ...item,
+                        price: existing?.price, // 保留原数值
+                        change_pct: existing?.change_pct // 保留原数值
+                    };
+                });
+            });
             
-            // 异步获取价格
-            for (const item of data) {
+            // 批量获取价格
+            if (data.length > 0) {
+                const symbols = data.map((i: any) => i.symbol).join(',');
+                const markets = data.map((i: any) => i.market).join(',');
                 try {
-                    const priceRes = await fetch(`http://localhost:8000/api/quote?symbol=${item.symbol}&market=${item.market}`);
-                    const priceData = await priceRes.json();
-                    setWatchlist(prev => prev.map(p => 
-                        p.symbol === item.symbol ? { ...p, price: priceData.price, change_pct: priceData.metrics?.change_pct } : p
-                    ));
+                    const priceRes = await fetch(`http://localhost:8030/api/quotes?symbols=${symbols}&markets=${markets}`);
+                    if (!priceRes.ok) throw new Error("Batch fetch failed");
+                    const quotesData = await priceRes.json();
+                    
+                    setWatchlist(prev => prev.map(p => {
+                        const quote = quotesData[p.symbol];
+                        if (quote) {
+                            return { ...p, price: quote.price, change_pct: quote.change_pct };
+                        }
+                        return p;
+                    }));
                 } catch (e) {
-                    console.error("Price fetch error", e);
+                    console.error("Batch price fetch error", e);
                 }
             }
         } catch (e) {
@@ -47,7 +66,7 @@ export function Sidebar({ onSelectStock, currentSymbol, lastUpdated }: { onSelec
 
     const removeFromWatchlist = async (symbol: string) => {
         try {
-            await fetch(`http://localhost:8000/api/watchlist/${symbol}`, { method: 'DELETE' });
+            await fetch(`http://localhost:8030/api/watchlist/${symbol}`, { method: 'DELETE' });
             setWatchlist(prev => prev.filter(item => item.symbol !== symbol));
         } catch (e) {
             console.error(e);
@@ -81,14 +100,15 @@ export function Sidebar({ onSelectStock, currentSymbol, lastUpdated }: { onSelec
                     </div>
                 ) : (
                     watchlist.map((item) => {
-                        const isUp = item.change_pct && !item.change_pct.startsWith('-');
+                        const changeStr = String(item.change_pct || '');
+                        const isUp = changeStr && !changeStr.startsWith('-');
                         const isActive = item.symbol === currentSymbol;
                         
                         return (
                             <div 
                                 key={item.symbol}
                                 onClick={() => onSelectStock(item.symbol, item.market)}
-                                className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${isActive ? 'bg-blue-50 border-blue-100' : 'hover:bg-slate-50'}`}
+                                className={`flex items-center justify-between px-3 h-14 rounded-xl cursor-pointer transition-all ${isActive ? 'bg-blue-50 border border-blue-100 shadow-sm' : 'hover:bg-slate-50 border border-transparent'}`}
                             >
                                 <div className="flex-1 min-w-0 mr-2">
                                     <div className="flex items-center gap-2">
@@ -100,19 +120,23 @@ export function Sidebar({ onSelectStock, currentSymbol, lastUpdated }: { onSelec
                                 </div>
 
                                 <div className="text-right flex items-center gap-2">
-                                    <div className="flex flex-col items-end">
-                                        <span className="text-sm font-bold text-slate-800">
+                                    <div className="flex flex-col items-end justify-center min-w-[60px] h-full">
+                                        <span className="text-sm font-bold text-slate-800 leading-none mb-1">
                                             {item.price ? item.price.toFixed(2) : '--'}
                                         </span>
-                                        {item.change_pct && (
-                                            <span className={`text-[10px] font-bold ${isUp ? 'text-red-500' : 'text-emerald-500'}`}>
-                                                {isUp ? '+' : ''}{item.change_pct}
-                                            </span>
-                                        )}
+                                        <div className="h-3 flex items-center">
+                                            {item.change_pct ? (
+                                                <span className={`text-[10px] font-bold leading-none ${isUp ? 'text-red-500' : 'text-emerald-500'}`}>
+                                                    {isUp ? '+' : ''}{item.change_pct}
+                                                </span>
+                                            ) : (
+                                                <span className="text-[10px] font-bold text-slate-200 leading-none">--%</span>
+                                            )}
+                                        </div>
                                     </div>
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); removeFromWatchlist(item.symbol); }}
-                                        className="p-1 hover:text-red-500 text-slate-200"
+                                        className="p-1 hover:text-red-500 text-slate-200 transition-colors"
                                     >
                                         <Trash2 size={12} />
                                     </button>

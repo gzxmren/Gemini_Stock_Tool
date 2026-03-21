@@ -23,6 +23,8 @@ interface AnalysisData {
     score?: number;
     cached_at?: string;
     analysis_period?: string;
+    is_preliminary?: boolean;
+    confidence?: number;
 }
 
 interface AnalysisReportProps {
@@ -46,11 +48,27 @@ export const AnalysisReport: React.FC<AnalysisReportProps> = ({
 }) => {
     return (
         <div className={`bg-white border border-slate-100 rounded-3xl shadow-2xl overflow-hidden transition-all animate-in fade-in slide-in-from-bottom-4 ${loading ? 'opacity-50 pointer-events-none' : ''}`}>
+            {analysis.is_preliminary && (
+                <div className="bg-orange-500 text-white px-8 py-2 flex items-center gap-3 animate-pulse">
+                    <AlertTriangle size={16} className="shrink-0" />
+                    <span className="text-xs font-black uppercase tracking-wider">
+                        预警：当前分析基于业绩快报/初步数据，非审计后的正式季报，部分核心指标可能存在偏差。
+                    </span>
+                </div>
+            )}
+            
             <div className="bg-slate-800 p-8 text-white">
                 <div className="flex flex-col md:flex-row justify-between items-start gap-6">
                     <div className="flex-1">
-                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-[10px] font-black mb-4 uppercase tracking-widest border border-blue-500/30">
-                            {isCompareMode ? 'Comparative Analysis' : 'Historical Insight'}
+                        <div className="flex items-center gap-2 mb-4">
+                            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-[10px] font-black uppercase tracking-widest border border-blue-500/30">
+                                {isCompareMode ? 'Comparative Analysis' : 'Historical Insight'}
+                            </div>
+                            {analysis.is_preliminary && (
+                                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-orange-500 text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-orange-900/40">
+                                    Preliminary Data
+                                </div>
+                            )}
                         </div>
                         <h2 className="text-3xl font-black mb-4 flex items-center gap-3">
                             <Activity className="text-blue-400" /> AI 财报深度透视: {symbol}
@@ -59,7 +77,7 @@ export const AnalysisReport: React.FC<AnalysisReportProps> = ({
                             <div className="flex items-center gap-2 bg-blue-500 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-blue-900/20">
                                 <Calendar size={14} />
                                 <span className="text-xs font-black uppercase tracking-tight">
-                                    数据基准期: {analysis.analysis_period ? analysis.analysis_period.replace('Snapshot as of ', '') : '最新财报期'}
+                                    数据基准期: {analysis.analysis_period ? analysis.analysis_period.replace('Snapshot as of ', '').replace('(Express)', '') : '最新财报期'}
                                 </span>
                             </div>
 
@@ -144,10 +162,24 @@ export const AnalysisReport: React.FC<AnalysisReportProps> = ({
                     </section>
                 </div>
 
-                <section className="bg-blue-600 rounded-3xl p-8 text-white shadow-2xl shadow-blue-200">
-                    <div className="flex items-center gap-3 mb-4"><CheckCircle2 size={28} /><h3 className="text-2xl font-black">AI 结论建议</h3></div>
-                    <p className="text-blue-50 leading-relaxed text-lg font-bold mb-6">{analysis.conclusion}</p>
-                    <div className="flex items-center gap-2 text-blue-200 text-xs font-bold uppercase tracking-widest"><Info size={14} /> 投资有风险，入市需谨慎</div>
+                <section className="bg-blue-600 rounded-3xl p-8 text-white shadow-2xl shadow-blue-200 relative overflow-hidden">
+                    <div className="relative z-10">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                            <div className="flex items-center gap-3"><CheckCircle2 size={28} /><h3 className="text-2xl font-black">AI 结论建议</h3></div>
+                            {analysis.confidence && (
+                                <div className="flex items-center gap-2 bg-blue-500/30 border border-blue-400/30 px-4 py-1.5 rounded-full">
+                                    <ShieldCheck size={16} className="text-blue-200" />
+                                    <span className="text-xs font-black tracking-widest uppercase">
+                                        置信度: {analysis.confidence}%
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                        <p className="text-blue-50 leading-relaxed text-lg font-bold mb-6">{analysis.conclusion}</p>
+                        <div className="flex items-center gap-2 text-blue-200 text-xs font-bold uppercase tracking-widest"><Info size={14} /> 投资有风险，入市需谨慎</div>
+                    </div>
+                    {/* Background decoration */}
+                    <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-blue-500 rounded-full opacity-20 blur-3xl" />
                 </section>
             </div>
         </div>

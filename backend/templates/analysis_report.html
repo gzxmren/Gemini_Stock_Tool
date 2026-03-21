@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>AI 财报深度透视报告 - {{ symbol }}</title>
+    <style>
+        @page {
+            margin: 2cm;
+            @bottom-right {
+                content: "第 " counter(page) " 页";
+                font-size: 10px;
+                color: #64748b;
+            }
+        }
+        body {
+            font-family: "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+            color: #1e293b;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+        }
+        .header {
+            background-color: #1e293b;
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+        }
+        .report-tag {
+            display: inline-block;
+            background-color: rgba(59, 130, 246, 0.2);
+            color: #93c5fd;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            margin-bottom: 15px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 900;
+        }
+        .meta {
+            color: #94a3b8;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .score-container {
+            float: right;
+            text-align: center;
+        }
+        .score-value {
+            font-size: 42px;
+            font-weight: 900;
+            color: #60a5fa;
+            line-height: 1;
+        }
+        .score-label {
+            font-size: 10px;
+            color: #64748b;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .section {
+            margin-bottom: 35px;
+        }
+        .section-title {
+            font-size: 20px;
+            font-weight: 900;
+            border-left: 5px solid #2563eb;
+            padding-left: 15px;
+            margin-bottom: 20px;
+            color: #0f172a;
+        }
+        .grid {
+            display: flex;
+            gap: 20px;
+        }
+        .card {
+            flex: 1;
+            padding: 20px;
+            border-radius: 15px;
+            border: 1px solid #f1f5f9;
+        }
+        .card-highlights {
+            background-color: #f0fdf4;
+            border-color: #dcfce7;
+        }
+        .card-lowlights {
+            background-color: #fef2f2;
+            border-color: #fee2e2;
+        }
+        .card-title {
+            font-weight: bold;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+        .card-title-highlights { color: #059669; }
+        .card-title-lowlights { color: #dc2626; }
+        
+        ul {
+            padding-left: 20px;
+            margin: 0;
+        }
+        li {
+            font-size: 14px;
+            margin-bottom: 8px;
+            color: #334155;
+        }
+        .trends-box {
+            background-color: #f8fafc;
+            border: 1px solid #f1f5f9;
+            padding: 25px;
+            border-radius: 15px;
+        }
+        .trend-item {
+            display: flex;
+            margin-bottom: 15px;
+        }
+        .trend-text {
+            color: #334155;
+            font-weight: 500;
+        }
+        .health-risks {
+            display: flex;
+            gap: 25px;
+        }
+        .risk-box {
+            background-color: rgba(255, 237, 213, 0.3);
+            border: 1px solid #ffedd5;
+            padding: 20px;
+            border-radius: 15px;
+            flex: 1;
+        }
+        .conclusion-box {
+            background-color: #2563eb;
+            color: white;
+            padding: 30px;
+            border-radius: 20px;
+            margin-top: 40px;
+            box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.2);
+        }
+        .conclusion-title {
+            font-size: 24px;
+            font-weight: 900;
+            margin-bottom: 15px;
+        }
+        .conclusion-text {
+            font-size: 18px;
+            font-weight: 500;
+            line-height: 1.6;
+            color: #eff6ff;
+        }
+        .footer-note {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 20px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .clearfix::after {
+            content: "";
+            clear: both;
+            display: table;
+        }
+    </style>
+</head>
+<body>
+    <div class="header clearfix">
+        <div class="score-container">
+            <div class="score-value">{{ score }}</div>
+            <div class="score-label">AI 健康得分</div>
+        </div>
+        <div class="report-tag">Research Report</div>
+        <h1>AI 财报深度透视: {{ symbol }}</h1>
+        <div class="meta">
+            市场: {{ market }} | 生成日期: {{ generated_at }}
+            {% if cached_at %} | 缓存于: {{ cached_at }}{% endif %}
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">业绩红绿灯</div>
+        <div class="grid">
+            <div class="card card-highlights">
+                <div class="card-title card-title-highlights">业绩亮点</div>
+                <ul>
+                    {% for item in highlights %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="card card-lowlights">
+                <div class="card-title card-title-lowlights">业绩压力</div>
+                <ul>
+                    {% for item in lowlights %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">指标趋势解读</div>
+        <div class="trends-box">
+            {% for item in trends %}
+            <div class="trend-item">
+                <div class="trend-text">{{ item }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="section clearfix">
+        <div style="width: 48%; float: left;">
+            <div class="section-title" style="color: #2563eb;">财务健康度</div>
+            <div style="background-color: white; border: 1px solid #e2e8f0; padding: 20px; border-radius: 15px; min-height: 120px;">
+                <p style="font-style: italic; color: #475569;">"{{ health }}"</p>
+            </div>
+        </div>
+        <div style="width: 48%; float: right;">
+            <div class="section-title" style="color: #ea580c;">风险预警</div>
+            <div class="risk-box" style="min-height: 120px;">
+                <ul>
+                    {% for item in risks %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="conclusion-box">
+        <div class="conclusion-title">AI 结论建议</div>
+        <p class="conclusion-text">{{ conclusion }}</p>
+        <div class="footer-note" style="color: #bfdbfe; text-align: left; margin-top: 30px;">
+            投资有风险，入市需谨慎。本报告由 AI 模型生成，仅供参考，不构成投资建议。
+        </div>
+    </div>
+</body>
+</html>

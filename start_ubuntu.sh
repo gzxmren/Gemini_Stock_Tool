@@ -47,7 +47,7 @@ fi
 # 4. 启动服务
 echo -e "${BLUE}==========================================${NC}"
 echo -e "${GREEN}>>> 正在启动应用...${NC}"
-echo -e "${YELLOW}提示: 后端将运行在 http://localhost:8000${NC}"
+echo -e "${YELLOW}提示: 后端将运行在 http://localhost:8030${NC}"
 echo -e "${YELLOW}提示: 关闭应用窗口将自动停止所有进程${NC}"
 echo -e "${BLUE}==========================================${NC}"
 

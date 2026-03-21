@@ -1,202 +1,344 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 import yfinance as yf
 import httpx
 import asyncio
 import random
 import math
-from pydantic import BaseModel
+import json
+from typing import Optional, Dict, List
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+from concurrent.futures import ThreadPoolExecutor
+
+from database import get_db
+import models
+from services.ai_service import AIService
 
 router = APIRouter()
+executor = ThreadPoolExecutor(max_workers=10)
 
 COMMON_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-    "Referer": "https://gu.qq.com/",
-    "Accept": "*/*"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
+# 统一前端和后端的字段命名
 class DCFParams(BaseModel):
     fcf: float
     shares: float
-    growth_rate: float
-    discount_rate: float
-    terminal_rate: float
+    growth_rate: float = Field(..., alias="growth_rate")
+    discount_rate: float = Field(..., alias="discount_rate")
+    terminal_rate: float = Field(..., alias="terminal_rate")
     years: int = 5
 
-async def get_exchange_rate(from_curr: str, to_currency: str):
-    """获取实时汇率，例如从 CNY 转换到 USD"""
-    if from_curr == to_currency:
-        return 1.0
+    class Config:
+        populate_by_name = True
+
+def get_simulated_historical_stats(current_val: float):
+    if current_val <= 0: return {"low": 0, "high": 0, "mean": 0, "percentile": 0}
+    low = current_val * 0.6
+    high = current_val * 1.4
+    mean = (low + high) / 2
+    percentile = random.randint(10, 90)
+    return {"low": round(low, 2), "high": round(high, 2), "mean": round(mean, 2), "percentile": percentile}
+
+async def fetch_tencent_single(symbol: str):
+    prefix = "sh" if symbol.startswith('6') or symbol.startswith('9') else "sz"
+    url = f"http://qt.gtimg.cn/q={prefix}{symbol}"
     try:
-        # yfinance 汇率符号通常是 FROMTO=X
-        ticker_sym = f"{from_curr}{to_currency}=X"
-        rate_ticker = yf.Ticker(ticker_sym)
-        return rate_ticker.fast_info.last_price
+        async with httpx.AsyncClient(headers=COMMON_HEADERS, timeout=3.0) as client:
+            response = await client.get(url)
+            data = response.text.split('~')
+            if len(data) < 40: return None
+            return {
+                "name": data[1],
+                "price": float(data[3]),
+                "pe": float(data[39]) if data[39] != "" else 0,
+                "pb": float(data[45]) if len(data) > 45 and data[45] != "" else 0,
+                "change_pct": f"{data[32]}%"
+            }
+    except: return None
+
+def fetch_yf_info_sync(ticker_obj):
+    return ticker_obj.info, ticker_obj.fast_info
+
+@router.get("/quote")
+async def get_quote(symbol: str, market: str, db: Session = Depends(get_db)):
+    market = market.upper()
+    symbol = symbol.upper()
+    try:
+        if market == 'CN':
+            t_data = await fetch_tencent_single(symbol)
+            if not t_data: raise Exception("Market data unreachable")
+            return {
+                "symbol": f"{symbol} ({t_data['name']})",
+                "price": t_data['price'],
+                "currency": "¥",
+                "metrics": {
+                    "change_pct": t_data['change_pct'],
+                    "pe": t_data['pe'], "pb": t_data['pb'],
+                    "pe_stats": get_simulated_historical_stats(t_data['pe']),
+                    "pb_stats": get_simulated_historical_stats(t_data['pb'])
+                }
+            }
+        else:
+            ticker = yf.Ticker(symbol)
+            loop = asyncio.get_event_loop()
+            info, fast_info = await loop.run_in_executor(executor, fetch_yf_info_sync, ticker)
+            pe_val, pb_val = info.get('forwardPE', 0), info.get('priceToBook', 0)
+            change_val = ((fast_info.last_price / fast_info.previous_close) - 1) * 100 if fast_info.previous_close else 0
+            return {
+                "symbol": symbol,
+                "price": fast_info.last_price,
+                "currency": "$",
+                "metrics": {
+                    "change_pct": f"{change_val:.2f}%",
+                    "pe": pe_val, "pb": pb_val,
+                    "pe_stats": get_simulated_historical_stats(pe_val),
+                    "pb_stats": get_simulated_historical_stats(pb_val)
+                }
+            }
+    except Exception as e:
+        return {"error": str(e)}
+
+@router.get("/dcf/baseline")
+async def get_dcf_baseline(symbol: str, market: str):
+    if market.upper() != "US": return {"fcf": 0, "shares": 1}
+    try:
+        ticker = yf.Ticker(symbol)
+        loop = asyncio.get_event_loop()
+        info, _ = await loop.run_in_executor(executor, fetch_yf_info_sync, ticker)
+        return {"fcf": info.get('freeCashflow', 0) or 0, "shares": info.get('sharesOutstanding', 1) or 1}
+    except Exception as e:
+        return {"fcf": 0, "shares": 1, "error": str(e)}
+
+@router.get("/analyst/targets")
+async def get_analyst_targets(symbol: str, market: str):
+    if market.upper() != "US": return {"low": 0, "mean": 0, "high": 0}
+    try:
+        ticker = yf.Ticker(symbol)
+        loop = asyncio.get_event_loop()
+        info, _ = await loop.run_in_executor(executor, fetch_yf_info_sync, ticker)
+        return {"low": info.get('targetLowPrice', 0), "mean": info.get('targetMeanPrice', 0), "high": info.get('targetHighPrice', 0)}
+    except Exception as e:
+        return {"low": 0, "mean": 0, "high": 0, "error": str(e)}
+
+@router.get("/quotes")
+async def get_quotes(symbols: str, markets: Optional[str] = None):
+    if not symbols: return {}
+    symbol_list = symbols.split(',')
+    market_list = markets.split(',') if markets else ['US'] * len(symbol_list)
+    results, tasks = {}, []
+    cn_indices = [i for i, m in enumerate(market_list) if m.upper() == 'CN']
+    if cn_indices:
+        cn_symbols = [symbol_list[i] for i in cn_indices]
+        formatted = ",".join([f"{'sh' if s.startswith('6') or s.startswith('9') else 'sz'}{s}" for s in cn_symbols])
+        async def fetch_cn_batch():
+            try:
+                async with httpx.AsyncClient(headers=COMMON_HEADERS, timeout=3.0) as client:
+                    resp = await client.get(f"http://qt.gtimg.cn/q={formatted}")
+                    if resp.status_code == 200:
+                        for line in resp.text.split(';\n'):
+                            d = line.split('~')
+                            if len(d) > 32: results[d[2]] = {"price": float(d[3]), "change_pct": f"{d[32]}%"}
+            except: pass
+        tasks.append(fetch_cn_batch())
+    us_symbols = [symbol_list[i] for i, m in enumerate(market_list) if m.upper() == 'US']
+    if us_symbols:
+        async def fetch_us_batch():
+            try:
+                tickers = yf.Tickers(" ".join(us_symbols))
+                def process_us():
+                    for s in us_symbols:
+                        try:
+                            f = tickers.tickers[s].fast_info
+                            results[s] = {"price": f.last_price, "change_pct": f"{((f.last_price / f.previous_close) - 1) * 100:.2f}%"}
+                        except: results[s] = {"price": None, "change_pct": None}
+                await asyncio.get_event_loop().run_in_executor(executor, process_us)
+            except: pass
+        tasks.append(fetch_us_batch())
+    await asyncio.gather(*tasks)
+    return results
+
+@router.get("/kline")
+async def get_kline(symbol: str, market: str, interval: str = "1d"):
+    market = market.upper()
+    try:
+        if market == "US":
+            ticker = yf.Ticker(symbol)
+            hist = await asyncio.get_event_loop().run_in_executor(executor, lambda: ticker.history(period="2y", interval="1d"))
+            return [[idx.strftime('%Y-%m-%d'), float(row['Open']), float(row['Close']), float(row['Low']), float(row['High']), int(row['Volume'])] for idx, row in hist.iterrows()]
+        else:
+            prefix = "sh" if symbol.startswith('6') or symbol.startswith('9') else "sz"
+            clean_s = symbol.replace('SH','').replace('SZ','').replace('sh','').replace('sz','')
+            url = f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={prefix}{clean_s}&scale=240&ma=no&datalen=1024"
+            async with httpx.AsyncClient(headers=COMMON_HEADERS, timeout=5.0) as client:
+                resp = await client.get(url)
+                return [[item['day'], float(item['open']), float(item['close']), float(item['low']), float(item['high']), int(item['volume'])] for item in resp.json()]
+    except Exception as e:
+        return {"error": str(e)}
+
+@router.post("/dcf")
+def calculate_dcf(params: DCFParams):
+    try:
+        if params.shares <= 0: return {"fair_value": 0, "upside": 0}
+        future_fcf = []
+        current_fcf = params.fcf
+        for _ in range(1, params.years + 1):
+            current_fcf *= (1 + params.growth_rate)
+            future_fcf.append(current_fcf)
+        
+        denom = (params.discount_rate - params.terminal_rate)
+        if denom <= 0: denom = 0.01 # 防止除零或折现率过低
+        
+        terminal_value = (future_fcf[-1] * (1 + params.terminal_rate)) / denom
+        present_values = [fcf / (1 + params.discount_rate)**i for i, fcf in enumerate(future_fcf, 1)]
+        present_terminal_value = terminal_value / (1 + params.discount_rate)**params.years
+        total_pv = sum(present_values) + present_terminal_value
+        fair_value = total_pv / params.shares
+        return {"fair_value": fair_value, "upside": 0}
     except:
-        # 降级处理：常见汇率硬编码备用
-        rates = {"CNYUSD": 0.14, "HKDUSD": 0.128, "TWDUSD": 0.031}
-        return rates.get(f"{from_curr}{to_currency}", 1.0)
+        return {"fair_value": 0, "upside": 0}
 
 @router.get("/dcf/professional")
 async def get_professional_dcf_data(symbol: str):
     try:
         ticker = yf.Ticker(symbol)
-        info = ticker.info
+        loop = asyncio.get_event_loop()
         
-        # 1. 货币识别与汇率转换逻辑
-        report_currency = info.get('financialCurrency', 'USD')
-        trade_currency = info.get('currency', 'USD')
+        def fetch_all_financial_data():
+            """
+            在单线程中顺序获取所有报表，避免多线程请求雅虎导致被封 IP 或竞态错误。
+            """
+            try:
+                # 1. 利润表 (优先年报，回退季报)
+                income = ticker.financials
+                if income is None or income.empty:
+                    income = ticker.quarterly_financials
+                
+                # 2. 资产负债表
+                balance = ticker.balance_sheet
+                if balance is None or balance.empty:
+                    balance = ticker.quarterly_balance_sheet
+                
+                # 3. 现金流量表
+                cashflow = ticker.cashflow
+                if cashflow is None or cashflow.empty:
+                    cashflow = ticker.quarterly_cashflow
+                
+                # 4. 基础信息 (用于股本)
+                info = ticker.info
+                
+                return income, balance, cashflow, info
+            except Exception as e:
+                raise Exception(f"Yahoo Finance 请求失败: {str(e)}")
+            
+        income, balance, cashflow, info = await loop.run_in_executor(executor, fetch_all_financial_data)
+        
+        # --- 汇率转换逻辑 ---
+        report_cur = info.get('financialCurrency', 'USD')
+        trade_cur = info.get('currency', 'USD')
         fx_rate = 1.0
         
-        if report_currency != trade_currency:
-            fx_rate = await get_exchange_rate(report_currency, trade_currency)
-
-        financials = ticker.financials
-        cashflow = ticker.cashflow
-        balance_sheet = ticker.balance_sheet
-        
-        def get_latest(df, key, default=0):
+        if report_cur != trade_cur:
             try:
-                val = float(df.loc[key].iloc[0])
-                return 0 if math.isnan(val) else val
-            except: return default
+                fx_ticker = f"{report_cur}{trade_cur}=X"
+                # 简单缓存或快速获取汇率
+                fx_data = yf.Ticker(fx_ticker).fast_info
+                fx_rate = fx_data.last_price
+            except:
+                # 常见硬编码兜底 (TWD -> USD)
+                if report_cur == "TWD" and trade_cur == "USD": fx_rate = 0.031
+                elif report_cur == "HKD" and trade_cur == "USD": fx_rate = 0.128
+                elif report_cur == "CNY" and trade_cur == "USD": fx_rate = 0.14
 
-        # 2. 抓取原始数据并进行汇率折算
-        revenue = get_latest(financials, 'Total Revenue') * fx_rate
-        ebit = get_latest(financials, 'EBIT') * fx_rate
-        tax_provision = get_latest(financials, 'Tax Provision') * fx_rate
-        pretax_income = get_latest(financials, 'Pretax Income') * fx_rate
-        tax_rate = (tax_provision / pretax_income) if pretax_income > 0 else 0.21
+        def safe_get_list(df, keywords: List[str]):
+            if df is None or df.empty: return [0]*4
+            # 1. 优先完全匹配
+            for k in keywords:
+                if k in df.index: 
+                    vals = df.loc[k].tolist()
+                    return [float(v) * fx_rate if v is not None and not math.isnan(float(v)) else 0 for v in vals[:4]]
+            # 2. 模糊匹配
+            for idx_name in df.index:
+                idx_lower = str(idx_name).lower()
+                for kw in keywords:
+                    if kw.lower() in idx_lower:
+                        vals = df.loc[idx_name].tolist()
+                        return [float(v) * fx_rate if v is not None and not math.isnan(float(v)) else 0 for v in vals[:4]]
+            return [0]*4
 
-        da = (get_latest(cashflow, 'Depreciation And Amortization') or 
-              (get_latest(cashflow, 'Depreciation') + get_latest(cashflow, 'Amortization', 0))) * fx_rate
-        capex = abs(get_latest(cashflow, 'Capital Expenditure')) * fx_rate
-        change_in_wc = get_latest(cashflow, 'Change In Working Capital') * fx_rate
+        def safe_get_val(df, keywords: List[str]):
+            if df is None or df.empty: return 0
+            for k in keywords:
+                if k in df.index: 
+                    vals = df.loc[k].tolist()
+                    if vals and vals[0] is not None and not math.isnan(float(vals[0])):
+                        return float(vals[0]) * fx_rate
+            for idx_name in df.index:
+                idx_lower = str(idx_name).lower()
+                for kw in keywords:
+                    if kw.lower() in idx_lower:
+                        vals = df.loc[idx_name].tolist()
+                        if vals and vals[0] is not None and not math.isnan(float(vals[0])):
+                            return float(vals[0]) * fx_rate
+            return 0
 
-        total_debt = get_latest(balance_sheet, 'Total Debt') * fx_rate
-        cash = get_latest(balance_sheet, 'Cash And Cash Equivalents') * fx_rate
-        minority_interest = get_latest(balance_sheet, 'Minority Interest') * fx_rate
-        shares = info.get('sharesOutstanding', 0)
+        if income is None or income.empty:
+            raise Exception("无法从 Yahoo Finance 获取利润表数据")
 
-        # 3. 分红数据提取
-        dividends = ticker.dividends
-        div_history = []
-        if not dividends.empty:
-            # 提取过去三年的年度分红汇总
-            annual_div = dividends.groupby(dividends.index.year).sum().tail(3)
-            div_history = [{"year": int(y), "amount": float(v)} for y, v in annual_div.items()]
+        ebit_data = safe_get_list(income, ['EBIT', 'Operating Income', 'OperatingProfit'])
+        if all(v == 0 for v in ebit_data):
+            ebit_data = safe_get_list(income, ['Gross Profit', 'Total Revenue'])
+
+        # 补全专业 DCF 需要的辅助维度
+        try:
+            # 股息率通常已经是比例，不需要乘以汇率
+            div_yield = info.get('dividendYield', 0) or 0
+            # 特殊处理：如果 div_yield 异常大 (可能是百分比格式或币种错误)，强制限制
+            if div_yield > 1.0: div_yield = div_yield / 100.0
+            
+            payout_ratio = info.get('payoutRatio', 0) or 0
+            beta = info.get('beta', 1.0) or 1.0
+        except:
+            div_yield, payout_ratio, beta = 0, 0, 1.0
 
         return {
             "symbol": symbol,
             "currency_info": {
-                "report_currency": report_currency,
-                "trade_currency": trade_currency,
+                "report_currency": report_cur,
+                "trade_currency": trade_cur,
                 "fx_rate": fx_rate
             },
             "income_statement": {
-                "revenue": revenue,
-                "ebit": ebit,
-                "tax_rate": round(tax_rate, 4)
+                "revenue": safe_get_list(income, ['Total Revenue', 'Operating Revenue', 'Revenue'])[0],
+                "ebit": ebit_data[0],
+                "tax_rate": 0.25
             },
             "cash_flow": {
-                "da": da,
-                "capex": capex,
-                "change_in_wc": change_in_wc
+                "da": safe_get_list(cashflow, ['Amortization', 'Depreciation And Amortization', 'Depreciation'])[0],
+                "capex": abs(safe_get_list(cashflow, ['Capital Expenditure', 'Net PPE PurchaseAndSale', 'Investing Cash Flow'])[0]),
+                "change_in_wc": 0
             },
             "balance_sheet": {
-                "total_debt": total_debt,
-                "cash": cash,
-                "minority_interest": minority_interest,
-                "shares_outstanding": shares
+                "total_debt": safe_get_val(balance, ['Total Debt', 'Long Term Debt', 'Net Debt']),
+                "cash": safe_get_val(balance, ['Cash And Cash Equivalents', 'Cash Cash Equivalents And Short Term Investments', 'Cash']),
+                "minority_interest": 0,
+                "shares_outstanding": (info.get('sharesOutstanding') or 1)
             },
             "dividends": {
-                "yield": info.get('dividendYield', 0),
-                "payout_ratio": info.get('payoutRatio', 0),
-                "history": div_history
+                "yield": div_yield,
+                "payout_ratio": payout_ratio,
+                "history": []
             },
             "wacc_params": {
-                "beta": info.get('beta', 1.0),
-                "cost_of_equity": round(0.042 + info.get('beta', 1.0) * 0.055, 4),
+                "beta": beta,
+                "cost_of_equity": 0.08 + beta * 0.05,
                 "cost_of_debt": 0.05
+            },
+            "trends": {
+                "revenue": safe_get_list(income, ['Total Revenue', 'Operating Revenue', 'Revenue']),
+                "ebit": ebit_data
             }
         }
     except Exception as e:
-        return {"error": f"Failed to extract DCF data: {str(e)}"}
-
-@router.post("/dcf")
-def calculate_dcf(params: DCFParams):
-    # (保持原有计算逻辑不变)
-    future_fcf = []
-    current_fcf = params.fcf
-    for year in range(1, params.years + 1):
-        current_fcf *= (1 + params.growth_rate)
-        discounted_fcf = current_fcf / ((1 + params.discount_rate) ** year)
-        future_fcf.append(discounted_fcf)
-    terminal_value = (current_fcf * (1 + params.terminal_rate)) / (params.discount_rate - params.terminal_rate)
-    discounted_tv = terminal_value / ((1 + params.discount_rate) ** params.years)
-    total_enterprise_value = sum(future_fcf) + discounted_tv
-    intrinsic_value_per_share = total_enterprise_value / params.shares if params.shares > 0 else 0
-    return {"intrinsic_value": round(intrinsic_value_per_share, 2), "total_ev": round(total_enterprise_value, 2)}
-
-@router.get("/history")
-async def get_history(symbol: str, market: str):
-    if market.upper() == "US":
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
-        current_pe = info.get('forwardPE', 15)
-        mock_history = [current_pe * (1 + (i - 2)*0.1) for i in range(5)]
-        return {"symbol": symbol, "historical_pe": mock_history}
-    return {"error": "Market history not supported yet"}
-
-def get_simulated_historical_stats(current_val: float):
-    if current_val == 0: return None
-    low = round(current_val * random.uniform(0.4, 0.7), 2)
-    high = round(current_val * random.uniform(1.5, 2.5), 2)
-    mean = round((low + high) / 2 * random.uniform(0.8, 1.2), 2)
-    percentile = int(((current_val - low) / (high - low)) * 100) if high > low else 50
-    return {"low": low, "high": high, "mean": mean, "percentile": max(0, min(100, percentile))}
-
-async def fetch_tencent_data(symbol: str):
-    prefix = "sh" if symbol.startswith('6') else "sz"
-    full_symbol = f"{prefix}{symbol}"
-    url = f"https://qt.gtimg.cn/q={full_symbol}"
-    async with httpx.AsyncClient(headers=COMMON_HEADERS, timeout=5.0) as client:
-        response = await client.get(url)
-        if response.status_code != 200: return None
-        text = response.text
-        parts = text.split('~')
-        if len(parts) < 47: return None
-        name, price, change_pct, pe, pb = parts[1], float(parts[3]), float(parts[32]), parts[39], parts[46]
-        pe_val = float(pe) if pe != "-" else 0
-        pb_val = float(pb) if pb != "-" else 0
-        return {
-            "symbol": f"{symbol} ({name})", "price": price, "currency": "¥",
-            "metrics": {
-                "change_pct": f"{change_pct}%", "pe": pe_val, "pb": pb_val,
-                "pe_stats": get_simulated_historical_stats(pe_val),
-                "pb_stats": get_simulated_historical_stats(pb_val)
-            }
-        }
-
-@router.get("/quote")
-async def get_quote(symbol: str, market: str):
-    market = market.upper()
-    try:
-        if market == "US":
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            fast_info = ticker.fast_info
-            pe_val, pb_val = info.get('forwardPE', 0), info.get('priceToBook', 0)
-            return {
-                "symbol": symbol, "price": fast_info.last_price, "currency": "$",
-                "metrics": {
-                    "change_pct": f"{((fast_info.last_price / fast_info.previous_close) - 1) * 100:.2f}%",
-                    "pe": pe_val, "pb": pb_val,
-                    "pe_stats": get_simulated_historical_stats(pe_val),
-                    "pb_stats": get_simulated_historical_stats(pb_val),
-                    "analyst_target": {"low": info.get('targetLowPrice'), "mean": info.get('targetMeanPrice'), "high": info.get('targetHighPrice')},
-                    "dcf_baseline": {"fcf": info.get('freeCashflow', 0), "shares": info.get('sharesOutstanding', 1)}
-                }
-            }
-        elif market == "CN": return await fetch_tencent_data(symbol)
-    except Exception as e: return {"error": f"查询失败: 请稍后再试。"}
-    return {"error": "暂不支持该市场"}
+        return {"error": f"DCF 数据映射失败: {str(e)}"}

@@ -2,7 +2,15 @@ fastapi==0.104.1
 uvicorn==0.23.2
 pytest==7.4.3
 httpx==0.25.1
-yfinance==0.2.31
-akshare==1.11.14
+yfinance>=0.2.40
+akshare>=1.16.72
 pandas==2.1.2
 sqlalchemy==2.0.23
+google-auth-oauthlib==1.1.0
+google-auth==2.23.4
+google-generativeai==0.3.1
+python-dotenv==1.0.0
+openai==1.12.0
+pdfkit
+jinja2
+weasyprint
